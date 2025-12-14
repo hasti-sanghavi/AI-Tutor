@@ -1,0 +1,572 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "search-insights",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "4a760ffb-5c9f-4b37-8999-efec75396037",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        -1872,
+        336
+      ],
+      "webhookId": "search-insights-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and validate query parameters\nconst body = $json.body || $json;\nconst query = body.query || body.q;\nconst userId = body.user_id || 'b4be8dc3-d699-4d6d-8581-282556c81ee5';\nconst searchType = body.search_type || 'both'; // 'insights', 'content', or 'both'\nconst maxResults = Number(body.max_results || body.limit || 10);\nconst dateRange = body.date_range || '30d';\nconst difficulty = body.difficulty || null;\n\nif (!query || query.trim().length === 0) {\n  return [{\n    json: {\n      success: false,\n      error: \"Query parameter is required\",\n      message: \"Please provide a 'query' in the request body\"\n    }\n  }];\n}\n\n// Parse date range (e.g., '7d', '30d', '3m')\nlet daysAgo = 30;\nconst rangeMatch = dateRange.match(/^(\\d+)([dwmy])$/);\nif (rangeMatch) {\n  const num = parseInt(rangeMatch[1]);\n  const unit = rangeMatch[2];\n  \n  switch(unit) {\n    case 'd': daysAgo = num; break;\n    case 'w': daysAgo = num * 7; break;\n    case 'm': daysAgo = num * 30; break;\n    case 'y': daysAgo = num * 365; break;\n  }\n}\n\nreturn [{\n  json: {\n    query: query.trim(),\n    user_id: userId,\n    search_type: searchType,\n    max_results: maxResults,\n    days_ago: daysAgo,\n    difficulty: difficulty,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1664,
+        336
+      ],
+      "id": "e5570246-6ba2-4777-9681-64efc8ae7d81",
+      "name": "Parse & Validate Query"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1472,
+        336
+      ],
+      "id": "bd3461c7-9466-4946-a3d1-f4908aaf281d",
+      "name": "Check Valid Query"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -1232,
+        208
+      ],
+      "id": "92c6665f-3ff6-4459-81a1-fe2281f27745",
+      "name": "Return Error Response"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"text-embedding-3-small\",\n  \"input\": \"{{ $json.query }}\"\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -1264,
+        448
+      ],
+      "id": "94df6440-cc87-4e58-a9c4-3bf5f7e2f13b",
+      "name": "Generate Query Embedding",
+      "credentials": {
+        "openAiApi": {
+          "id": "2upRNPy9nEd18Ezl",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const embedding = $json.data?.[0]?.embedding || [];\n\nif (!embedding || embedding.length === 0) {\n  throw new Error(\"Failed to generate query embedding\");\n}\n\nconst embeddingStr = '[' + embedding.join(',') + ']';\nconst queryData = $items(\"Parse & Validate Query\")[0].json;\n\nreturn [{\n  json: {\n    ...queryData,\n    query_embedding: embeddingStr\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1072,
+        448
+      ],
+      "id": "d4318ed0-5195-4c9e-8a57-e741b3ccafaf",
+      "name": "Format Query Embedding"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- SIMPLIFIED - No threshold, broader date range\nSELECT \n    i.id,\n    i.digest_id,\n    i.title,\n    i.content,\n    i.difficulty,\n    i.source_name,\n    i.source_url,\n    i.source_type,\n    i.faithfulness_score,\n    i.relevance_score,\n    i.aggregate_rating,\n    i.created_at,\n    1 - (i.embedding <=> $1::vector) AS similarity,\n    'insight' AS result_type\nFROM insights i\nWHERE i.embedding IS NOT NULL\nORDER BY similarity DESC\nLIMIT 20;",
+        "options": {
+          "queryReplacement": "={{ [$json.query_embedding, $json.days_ago, $json.difficulty, $json.max_results] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -864,
+        336
+      ],
+      "id": "32b5abe2-8261-4326-b18a-1589872b68cb",
+      "name": "Search Insights (Vector)",
+      "credentials": {
+        "postgres": {
+          "id": "km9vFAgKDt15jM5w",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- SIMPLIFIED - No threshold, broader date range\nSELECT \n    c.id,\n    c.title,\n    c.url,\n    c.created_at,\n    c.relevance_score,\n    cc.chunk_text,\n    cc.chunk_index,\n    1 - (cc.embedding <=> $1::vector) AS similarity,\n    'content' AS result_type\nFROM content_chunks cc\nJOIN content c ON cc.content_id = c.id\nWHERE cc.embedding IS NOT NULL\nORDER BY similarity DESC\nLIMIT 20;",
+        "options": {
+          "queryReplacement": "={{ [$json.query_embedding, $json.days_ago, $json.max_results] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -864,
+        528
+      ],
+      "id": "9c06f2f7-1eb4-4b95-9247-529e77c4ea52",
+      "name": "Search Content (Vector)",
+      "credentials": {
+        "postgres": {
+          "id": "km9vFAgKDt15jM5w",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine results from both searches\nconst insightResults = $items(\"Search Insights (Vector)\") || [];\nconst contentResults = $items(\"Search Content (Vector)\") || [];\nconst queryInfo = $items(\"Format Query Embedding\")[0].json;\n\nconst allResults = [];\n\n// Process insight results\ninsightResults.forEach(item => {\n  if (item.json) {\n    allResults.push({\n      type: 'insight',\n      id: item.json.id,\n      title: item.json.title,\n      content: item.json.content,\n      source: item.json.source_name,\n      url: item.json.source_url,\n      date: item.json.created_at,\n      digest_date: item.json.digest_date,\n      difficulty: item.json.difficulty,\n      similarity: item.json.similarity,\n      faithfulness: item.json.faithfulness_score,\n      relevance: item.json.relevance_score,\n      aggregate_rating: item.json.aggregate_rating\n    });\n  }\n});\n\n// Process content results - group by content_id\nconst contentMap = {};\ncontentResults.forEach(item => {\n  if (item.json) {\n    const contentId = item.json.id;\n    if (!contentMap[contentId]) {\n      contentMap[contentId] = {\n        type: 'content',\n        id: contentId,\n        title: item.json.title,\n        url: item.json.url,\n        date: item.json.created_at,\n        chunks: [],\n        max_similarity: item.json.similarity\n      };\n    }\n    contentMap[contentId].chunks.push({\n      text: item.json.chunk_text,\n      index: item.json.chunk_index,\n      similarity: item.json.similarity\n    });\n    if (item.json.similarity > contentMap[contentId].max_similarity) {\n      contentMap[contentId].max_similarity = item.json.similarity;\n    }\n  }\n});\n\n// Add grouped content to results\nObject.values(contentMap).forEach(content => {\n  content.content = content.chunks\n    .sort((a, b) => a.index - b.index)\n    .map(c => c.text)\n    .join(' ... ');\n  content.similarity = content.max_similarity;\n  delete content.chunks;\n  delete content.max_similarity;\n  allResults.push(content);\n});\n\n// Sort by similarity\nallResults.sort((a, b) => b.similarity - a.similarity);\n\n// Limit to max_results\nconst limitedResults = allResults.slice(0, queryInfo.max_results);\n\nreturn [{\n  json: {\n    query: queryInfo.query,\n    user_id: queryInfo.user_id,\n    search_type: queryInfo.search_type,\n    results: limitedResults,\n    total_results: limitedResults.length,\n    search_timestamp: queryInfo.timestamp\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        464
+      ],
+      "id": "c20c8d5a-01d8-4216-97f3-6598fe5d5653",
+      "name": "Combine & Rank Results"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check-no-results",
+              "leftValue": "={{ $json.total_results }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -128,
+        464
+      ],
+      "id": "0aacf3e7-ea63-4f9f-889f-5f54f37b5158",
+      "name": "Check Results Found"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nreturn [{\n  json: {\n    success: false,\n    query: data.query,\n    message: \"No relevant insights found for your query.\",\n    suggestions: [\n      \"Try broadening your search terms\",\n      \"Extend the date range (current: \" + $items(\"Format Query Embedding\")[0].json.days_ago + \" days)\",\n      \"Check if content has been ingested on this topic\",\n      \"Try related keywords or phrases\"\n    ],\n    metadata: {\n      search_timestamp: data.search_timestamp,\n      days_searched: $items(\"Format Query Embedding\")[0].json.days_ago,\n      user_id: data.user_id\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        352
+      ],
+      "id": "e0cf02ad-2ef8-42d6-9284-f13bf789c962",
+      "name": "Format No Results Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        272,
+        352
+      ],
+      "id": "b94cf927-c8d7-4456-b13a-1317f5b4839b",
+      "name": "Return No Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst results = data.results || [];\n\n// Build context from top results (limit to top 5 for context window)\nconst context = results.slice(0, 5).map((item, i) => {\n  let source = `[${i + 1}] ${item.title}`;\n  if (item.url) source += ` (${item.url})`;\n  source += `\\nType: ${item.type}`;\n  source += `\\nDate: ${new Date(item.date).toLocaleDateString()}`;\n  source += `\\nRelevance: ${Math.round(item.similarity * 100)}%`;\n  \n  if (item.type === 'insight') {\n    source += `\\nDifficulty: ${item.difficulty}`;\n    source += `\\nQuality: ${Math.round(item.aggregate_rating * 100)}%`;\n    if (item.digest_date) {\n      source += `\\nFrom digest: ${item.digest_date}`;\n    }\n  }\n  \n  const content = item.content || '';  // Default to empty string\nconst contentPreview = content.length > 0 \n  ? content.substring(0, 1000) \n  : '[No content available]';\nsource += `\\n\\nContent:\\n${contentPreview}...\\n`;\n// ✅ Safe with null/undefined\n  return source;\n}).join('\\n---\\n\\n');\n\nconst prompt = `\nUser's Question: \"${data.query}\"\n\nRetrieved Context (${results.length} sources found):\n\n${context}\n\nPlease answer the user's question based on the above sources. Follow these guidelines:\n1. Provide a clear, comprehensive answer\n2. Cite specific sources using [1], [2], etc.\n3. If the answer isn't fully covered by the sources, mention what's missing\n4. Highlight key insights and practical applications\n5. Suggest related topics the user might want to explore\n\nFormat your response as:\n# Answer to: [Question]\n\n[Direct answer with citations]\n\n## Sources Referenced\n- [List of sources used with brief context]\n\n## Related Topics to Explore\n- [Suggested areas based on the query]\n`;\n\nreturn [{\n  json: {\n    ...data,\n    prompt: prompt\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        592
+      ],
+      "id": "7e68e20c-5550-446f-8b66-69d29a694991",
+      "name": "Prepare AI Prompt"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the AI-generated answer\nconst aiResponse = $json.message?.content || $json.choices?.[0]?.message?.content || \"No answer generated\";\n\n// Get original data\nconst originalData = $items(\"Prepare AI Prompt\")[0].json;\nconst results = originalData.results || [];\n\n// Calculate response time\nconst startTime = new Date(originalData.search_timestamp);\nconst responseTime = Date.now() - startTime.getTime();\n\n// Build structured response\nconst response = {\n  success: true,\n  query: originalData.query,\n  answer: aiResponse,\n  metadata: {\n    total_sources: results.length,\n    insight_count: results.filter(r => r.type === 'insight').length,\n    content_count: results.filter(r => r.type === 'content').length,\n    search_timestamp: originalData.search_timestamp,\n    response_time_ms: responseTime,\n    date_range_days: $items(\"Format Query Embedding\")[0].json.days_ago\n  },\n  sources: results.map((item, i) => {\n    // Safely handle null/undefined content\n    const content = item.content || '';\n    const preview = content.length > 0 \n      ? content.substring(0, 200) + '...'\n      : '[No content available]';\n    \n    return {\n      index: i + 1,\n      type: item.type,\n      title: item.title,\n      url: item.url,\n      date: item.date,\n      relevance: Math.round(item.similarity * 100) + '%',\n      preview: preview,\n      difficulty: item.difficulty || null,\n      quality: item.aggregate_rating ? Math.round(item.aggregate_rating * 100) + '%' : null\n    };\n  })\n};\n\nreturn [{\n  json: response\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        592
+      ],
+      "id": "61c096ff-d517-4f95-893f-0e2b0b227150",
+      "name": "Format Final Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        880,
+        592
+      ],
+      "id": "ab52ed99-e7c4-4b5b-b61f-894b14064d61",
+      "name": "Return Success Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, email_id, topics, current_week\nFROM users\nWHERE id = $1\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -816,
+        816
+      ],
+      "id": "4ed3d3f3-ce09-4d7b-88f9-fe6dc265a8e7",
+      "name": "Fetch User1",
+      "credentials": {
+        "postgres": {
+          "id": "km9vFAgKDt15jM5w",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -560,
+        480
+      ],
+      "id": "e0a0e809-bdf1-4f49-b85c-61589c054f45",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.payload }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        496,
+        592
+      ],
+      "id": "89e91b49-2fc0-4e71-bdbb-97fe01def4e8",
+      "name": "HTTP Request",
+      "credentials": {
+        "openAiApi": {
+          "id": "2upRNPy9nEd18Ezl",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const promptData = $json;\n\nconst payload = {\n  model: \"gpt-4o-mini\",\n  messages: [\n    {\n      role: \"system\",\n      content: \"You are a helpful AI assistant that answers questions based on a user's learning history and stored insights. You provide accurate, well-cited responses and help users explore their knowledge base effectively.\"\n    },\n    {\n      role: \"user\",\n      content: promptData.prompt\n    }\n  ],\n  temperature: 0.7,\n  max_tokens: 1500\n};\n\nreturn [{\n  json: {\n    payload: payload,\n    original_data: promptData\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        592
+      ],
+      "id": "a404aa67-17db-4ac7-9d48-5d9581be5496",
+      "name": "Prepare OpenAI Request"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate Query": {
+      "main": [
+        [
+          {
+            "node": "Check Valid Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Valid Query": {
+      "main": [
+        [
+          {
+            "node": "Return Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Query Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Format Query Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Fetch User1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Insights (Vector)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Content (Vector)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Insights (Vector)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Content (Vector)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Combine & Rank Results": {
+      "main": [
+        [
+          {
+            "node": "Check Results Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Results Found": {
+      "main": [
+        [
+          {
+            "node": "Format No Results Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format No Results Response": {
+      "main": [
+        [
+          {
+            "node": "Return No Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prepare OpenAI Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Final Response": {
+      "main": [
+        [
+          {
+            "node": "Return Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return Success Response": {
+      "main": [
+        []
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Combine & Rank Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Format Final Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare OpenAI Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "63a77ed77bf09f03ba6c90c140f515163e715e09c649b39ba7e68fafac81943a"
+  }
+}
