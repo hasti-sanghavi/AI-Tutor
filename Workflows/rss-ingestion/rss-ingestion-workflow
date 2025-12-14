@@ -1,0 +1,847 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "customFields": "",
+          "ignoreSSL": false
+        }
+      },
+      "id": "43a55a2f-d71b-4c5d-996c-eae5c94a79bd",
+      "name": "Read RSS News Feeds",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [
+        -3520,
+        3760
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "73ffdc74-f577-453b-ba54-09914ced214d",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        -4096,
+        3760
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, url, title, priority, source_type \nFROM content_sources \nWHERE source_type = 'rss' AND active = true\nORDER BY priority DESC;",
+        "additionalFields": {}
+      },
+      "id": "849a8687-38db-497f-a70d-c1627949b5b2",
+      "name": "Fetch Active RSS Sources",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        -3920,
+        3760
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "BlA9q1AI4DOzM7R5",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "da0e8e48-c137-46ad-9f4e-b35b8d261683",
+      "name": "Split Into Single Source",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [
+        -3728,
+        3760
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $node[\"Split Into Single Source\"].json;\n\nreturn $input.all().map(entry => {\n  const item = entry.json;\n\n  const itemUrl =\n    item.link ||\n    item.guid ||\n    (item.enclosure && item.enclosure.url) ||\n    null;\n\n  const rawHtml =\n    item.content ||\n    item[\"content:encoded\"] ||\n    item.contentSnippet ||\n    item.description ||\n    null;\n\n  const title = item.title || source.title || null;\n\n  return {\n    json: {\n      source_id: source.id,\n      source_url: source.url,\n      item_url: itemUrl,\n      item_title: title,\n      published: item.pubDate || item.isoDate || null,\n      summary_html: rawHtml,\n    },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3136,
+        3744
+      ],
+      "id": "9962169b-c412-4456-ae66-eb991319feca",
+      "name": "Format article"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -3344,
+        3760
+      ],
+      "id": "34f9771c-ac20-44d7-a0a5-2ddcd22bd2de",
+      "name": "Split Articles"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(entry => {\n  const html = entry.json.summary_html || \"\";\n  let text = null;\n\n  if (html) {\n    text = html\n      .replace(/<script[\\s\\S]*?<\\/script>/gi, \"\")\n      .replace(/<style[\\s\\S]*?<\\/style>/gi, \"\")\n      .replace(/<[^>]+>/g, \" \")\n      .replace(/\\s+/g, \" \")\n      .trim();\n  }\n\n  return {\n    json: {\n      ...entry.json,\n      final_text: text\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2944,
+        3744
+      ],
+      "id": "b9c08882-32ae-4fe5-84f8-56b416f6bbc3",
+      "name": "HTML -> plain text"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nreturn $input.all().map(entry => {\n  const text = (entry.json.final_text || \"\").trim();\n  const url = entry.json.item_url || entry.json.source_url || null;\n  const title = entry.json.item_title || null;\n  const hash = text ? crypto.createHash(\"sha256\").update(text).digest(\"hex\") : null;\n\n  return {\n    json: {\n      ...entry.json,\n      url,\n      title,\n      raw_content: text,\n      content_hash: hash,\n      content_type: \"article\",\n      metadata: { published: entry.json.published }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2752,
+        3744
+      ],
+      "id": "3a67e79b-ea3b-40af-a2b6-77d00ff48877",
+      "name": "Prepare content + hash"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- new (always returns a row like {\"cnt\": 0} or {\"cnt\": 1})\nSELECT COUNT(1) AS cnt FROM content WHERE url = $1;\n",
+        "options": {
+          "queryReplacement": "={{[$json.url]}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -2384,
+        3552
+      ],
+      "id": "31fce7fa-32cf-4d37-a199-fc20964fad1d",
+      "name": "Check duplicate by URL",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "BlA9q1AI4DOzM7R5",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f3e5c53f-49fd-4f1c-aabf-d92ace4d7503",
+              "leftValue": "={{ Number($items(\"Check duplicate by URL\")[0].json.cnt) }}\n",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2416,
+        3744
+      ],
+      "id": "10cbcd85-d7ee-4cf7-9433-b048908f0a49",
+      "name": "If: URL exists?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(1) AS cnt \nFROM content \nWHERE content_hash = $1;",
+        "options": {
+          "queryReplacement": "={{ [$json.content_hash] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -2016,
+        3568
+      ],
+      "id": "638a7245-8ddc-4030-98e1-a984fec904e8",
+      "name": "Check duplicate by hash",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "BlA9q1AI4DOzM7R5",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "prompt": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "=User topics: AI, Transformers, Machine Learning, Artificial Intelligence, NLP\nUser difficulty: intermediate\n\nArticle title: {{ $json.title || $json.item_title }}\nArticle excerpt: {{ ($json.raw_content || '').slice(0, 1500) }}\n\nRate the relevance of this article to the user's learning topics with a number between 0 and 1.\nReturn ONLY the number."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 32
+        },
+        "requestOptions": {}
+      },
+      "id": "38753b2b-fe97-4ed4-9a39-eeb84b7f996b",
+      "name": "OpenAI: Relevance Scoring1",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        -1504,
+        3744
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2upRNPy9nEd18Ezl",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -2576,
+        3744
+      ],
+      "id": "b74aa4a1-02a8-4930-be5a-f2bb9dc92ce8",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "functionCode": "const results = [];\n\n$input.all().forEach((item, index) => {\n  // 1. Extract embedding\n  let embedding = item.json.data?.[0]?.embedding;\n  if (!embedding && item.json.body?.data?.[0]?.embedding) {\n    embedding = item.json.body.data[0].embedding;\n  }\n\n  if (!embedding || embedding.length === 0) {\n    console.log(`Skipping item ${index}: no embedding`);\n    return;\n  }\n\n  const embeddingStr = '[' + embedding.join(',') + ']';\n\n  // 2. Find original data - try multiple sources\n  let contentId = null;\n  let chunkText = null;\n  let chunkIndex = null;\n\n  // Source A: Current item\n  if (item.json.content_id) {\n    contentId = item.json.content_id;\n    chunkText = item.json.chunk_text || item.json.input;\n    chunkIndex = item.json.chunk_index;\n  }\n\n  // Source B: pairedItem\n  if (!contentId && item.pairedItem?.json?.content_id) {\n    contentId = item.pairedItem.json.content_id;\n    chunkText = item.pairedItem.json.chunk_text || item.pairedItem.json.input;\n    chunkIndex = item.pairedItem.json.chunk_index;\n  }\n\n  // Source C: Try previous node by index\n  if (!contentId) {\n    try {\n      const prepareItems = $items(\"Chunk and Prepare for Embedding\");\n      if (prepareItems && prepareItems[index]) {\n        contentId = prepareItems[index].json.content_id;\n        chunkText = prepareItems[index].json.chunk_text;\n        chunkIndex = prepareItems[index].json.chunk_index;\n      }\n    } catch (e) {}\n  }\n\n  // Source D: Try Generate Embeddings input\n  if (!contentId) {\n    try {\n      const genItems = $items(\"Generate Embeddings2\");\n      if (genItems && genItems[index]) {\n        contentId = genItems[index].json.content_id;\n        chunkText = genItems[index].json.chunk_text || genItems[index].json.input;\n        chunkIndex = genItems[index].json.chunk_index;\n      }\n    } catch (e) {}\n  }\n\n  if (!contentId) {\n    throw new Error(`Item ${index}: Cannot find content_id from any source`);\n  }\n\n  if (!chunkText) {\n    throw new Error(`Item ${index}: Cannot find chunk_text`);\n  }\n\n  results.push({\n    json: {\n      content_id: contentId,\n      chunk_text: chunkText,\n      chunk_index: chunkIndex !== undefined ? chunkIndex : 0,\n      embedding: embeddingStr\n    }\n  });\n});\n\nconsole.log(`Successfully formatted ${results.length} items for database`);\nreturn results;"
+      },
+      "id": "3c4d683d-1e0f-48c7-812f-a6de52ba465c",
+      "name": "Format Embedding for Postgres2",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        3728
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// === FIXED VERSION OF YOUR ORIGINAL CODE ===\n// Minimal changes, keeps all your structure, just corrects the logic.\n\n// Helper: extract numeric score from OpenAI response object\nfunction parseScoreFromOpenAI(openaiJson) {\n  if (!openaiJson) return 0;\n\n  let raw = '';\n\n  if (openaiJson.message?.content) {\n    raw = openaiJson.message.content;\n  } else if (openaiJson.choices?.[0]?.message?.content) {\n    raw = openaiJson.choices[0].message.content;\n  } else if (typeof openaiJson === 'string') {\n    raw = openaiJson;\n  } else {\n    raw = openaiJson.text || openaiJson.content || '';\n  }\n\n  const m = String(raw).match(/-?\\d+(\\.\\d+)?/);\n  if (!m) return 0;\n\n  const n = parseFloat(m[0]);\n  return isNaN(n) ? 0 : n;\n}\n\n// Helper: scan for original if pairedItem fails\nfunction findOriginalByScanning(idx, entry) {\n  const candidates = [\n    \"If Hash Exists?\",\n    \"If: Hash Exists?\",\n    \"If: Hash exists?\",\n    \"If Hash exists?\",\n    \"Split: For hash check\",\n    \"Split: For hash check (1)\",\n    \"Function: Prepare content + hash (multi-item)\",\n    \"Function: Prepare content + hash\",\n    \"Prepare content + hash\",\n    \"prepare_content\",\n    \"format_article\",\n    \"Format article\",\n    \"Format Article\",\n    \"Split: Articles (batch)\",\n    \"Split Articles\"\n  ];\n\n  for (const name of candidates) {\n    try {\n      const items = $items(name);\n      if (items && items.length) {\n        // If pairedItem exists, use that\n        if (entry.pairedItem && typeof entry.pairedItem.index === 'number') {\n          const i = entry.pairedItem.index;\n          if (items[i]?.json) return items[i].json;\n        }\n        // Try index\n        if (items[idx]?.json) return items[idx].json;\n      }\n    } catch (e) {}\n  }\n  return null;\n}\n\nconst outputs = [];\n\n$input.all().forEach((entry, index) => {\n  const openaiOutput = entry.json || {};\n\n  // === FIX #1: CORRECT PER-ITEM SCORE ===\n  const score = parseScoreFromOpenAI(openaiOutput);\n\n  // === ORIGINAL ITEM MATCHING LOGIC ===\n  let original = null;\n\n  // First: try pairedItem\n  try {\n    if (entry.pairedItem?.item !== undefined) {\n      const p = entry.pairedItem;\n      const arr = $items(p.node);\n      if (arr?.[p.index]?.json) {\n        original = arr[p.index].json;\n      }\n    }\n  } catch (e) {}\n\n  // If still not found: scan fallback nodes\n  if (!original) {\n    original = findOriginalByScanning(index, entry);\n  }\n\n  // Still nothing: fallback minimal object\n  if (!original) {\n    original = {};\n  }\n\n  // Normalize score\n  const normalizedScore = Math.max(0, Math.min(1, score));\n\n  outputs.push({\n    json: {\n      ...original,\n      relevance_score: normalizedScore,\n      is_relevant: normalizedScore > 0.5\n    }\n  });\n});\n\nreturn outputs;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1312,
+        3744
+      ],
+      "id": "8e37b1b3-55f2-494a-9b36-485ac08416d0",
+      "name": "Store Relevance Score"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6c46df13-74e7-403e-b20c-7d0863cfd80f",
+              "leftValue": "={{ Number($items(\"Check duplicate by hash\")[0].json.cnt) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1968,
+        3744
+      ],
+      "id": "520cc9cc-ed32-4d9f-8d95-27d08f5c6dce",
+      "name": "If: Hash exists?"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1760,
+        3760
+      ],
+      "id": "c8aa3ae1-3890-4c60-9213-385b48a7294a",
+      "name": "Loop Over Items2"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -2160,
+        3760
+      ],
+      "id": "22379ca4-4548-4d36-b11f-7bbd18603dc8",
+      "name": "Split: For hash check"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO content\n(\n    source_id,\n    url,\n    title,\n    raw_content,\n    content_hash,\n    content_type,\n    is_relevant,\n    relevance_score,\n    metadata\n)\nVALUES\n(\n    {{ $json.source_id ? `'${$json.source_id}'::uuid` : 'NULL' }},\n    {{ $json.url ? `'${$json.url.replace(/'/g, \"''\")}'` : 'NULL' }},\n    {{ $json.title ? `'${$json.title.replace(/'/g, \"''\")}'` : 'NULL' }},\n    {{ $json.raw_content ? `'${$json.raw_content.replace(/'/g, \"''\")}'` : 'NULL' }},\n    {{ $json.content_hash ? `'${$json.content_hash}'` : 'NULL' }},\n    'article',\n    {{ $json.is_relevant === true ? 'TRUE' : 'FALSE' }},\n    {{ $json.relevance_score }},\n    {{ $json.metadata ? `'${JSON.stringify($json.metadata).replace(/'/g, \"''\")}'::jsonb` : `'{}'::jsonb` }}\n)\nON CONFLICT (url) DO NOTHING\nRETURNING id, content_hash;\n",
+        "options": {
+          "queryReplacement": ""
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1104,
+        3744
+      ],
+      "id": "0bdc6ad0-8a88-49ed-85b2-50f9cb856ad5",
+      "name": "Insert Content",
+      "credentials": {
+        "postgres": {
+          "id": "BlA9q1AI4DOzM7R5",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read originals\nconst originals = $items(\"Store Relevance Score\");\n\n// Read Postgres results\nconst pg = $items(\"Insert Content\");\n\n// Build map: content_hash -> id\nconst idMap = {};\npg.forEach(r => {\n  if (r.json && r.json.id && r.json.content_hash) {\n    idMap[r.json.content_hash] = r.json.id;\n  }\n});\n\n// Return one item per original\nreturn originals.map(o => {\n  const data = o.json;\n  return {\n    json: {\n      ...data,\n      content_id: idMap[data.content_hash] || data.content_id || null\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -864,
+        3744
+      ],
+      "id": "c9618efe-4b2d-491a-9b8a-a83d3d44bfa9",
+      "name": "Merge Content ID"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all();\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        3744
+      ],
+      "id": "0773705f-7adf-448b-a485-698b19c19e1e",
+      "name": "Inspect Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\n\n$input.all().forEach(item => {\n  const text = String(item.json.raw_content || \"\");\n  const contentId = item.json.content_id;\n  \n  if (!contentId) return;\n  \n  const chunkSize = 1200;\n  const overlap = 200;\n  \n  let start = 0;\n  let chunkIndex = 0;\n  \n  while (start < text.length) {\n    const end = Math.min(start + chunkSize, text.length);\n    const chunkText = text.slice(start, end).trim();\n    \n    if (chunkText.length > 0) {\n      results.push({\n        json: {\n          content_id: contentId,\n          chunk_text: chunkText,\n          chunk_index: chunkIndex\n        }\n      });\n      chunkIndex++;\n    }\n    \n    if (end === text.length) break;\n    start = Math.max(0, end - overlap);\n  }\n});\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -464,
+        3744
+      ],
+      "id": "801f8df6-a80c-402c-8a51-97c1d8894519",
+      "name": "Chunk and Prepare for Embedding",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"text-embedding-3-small\",\n  \"input\": \"={{ $json.chunk_text }}\"\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -240,
+        3728
+      ],
+      "id": "5931bd28-fcf8-4e15-af0d-65717dcdd77e",
+      "name": "HTTP Request",
+      "credentials": {
+        "openAiApi": {
+          "id": "2upRNPy9nEd18Ezl",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "content_chunks",
+          "mode": "list",
+          "cachedResultName": "content_chunks"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "chunk_index": "={{ $json.chunk_index }}",
+            "content_id": "{{ $json.content_id }}",
+            "chunk_text": "{{ $json.chunk_text }}",
+            "embedding": "{{ $json.embedding }}",
+            "created_at": "={{ $now }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "content_id",
+              "displayName": "content_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "chunk_text",
+              "displayName": "chunk_text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "chunk_index",
+              "displayName": "chunk_index",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "embedding",
+              "displayName": "embedding",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        160,
+        3728
+      ],
+      "id": "b8c8559c-c3a5-4533-8d06-6d5da05b3956",
+      "name": "Insert rows in a table",
+      "credentials": {
+        "postgres": {
+          "id": "km9vFAgKDt15jM5w",
+          "name": "Postgres account 2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Read RSS News Feeds": {
+      "main": [
+        [
+          {
+            "node": "Split Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Active RSS Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Active RSS Sources": {
+      "main": [
+        [
+          {
+            "node": "Split Into Single Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Single Source": {
+      "main": [
+        [
+          {
+            "node": "Read RSS News Feeds",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split Into Single Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format article": {
+      "main": [
+        [
+          {
+            "node": "HTML -> plain text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Articles": {
+      "main": [
+        [
+          {
+            "node": "Format article",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Split Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML -> plain text": {
+      "main": [
+        [
+          {
+            "node": "Prepare content + hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare content + hash": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check duplicate by URL": {
+      "main": [
+        []
+      ]
+    },
+    "If: URL exists?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Split: For hash check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check duplicate by hash": {
+      "main": [
+        []
+      ]
+    },
+    "OpenAI: Relevance Scoring1": {
+      "main": [
+        [
+          {
+            "node": "Store Relevance Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Check duplicate by URL",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If: URL exists?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Embedding for Postgres2": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Relevance Score": {
+      "main": [
+        [
+          {
+            "node": "Insert Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If: Hash exists?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items2": {
+      "main": [
+        [
+          {
+            "node": "OpenAI: Relevance Scoring1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split: For hash check": {
+      "main": [
+        [
+          {
+            "node": "Check duplicate by hash",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If: Hash exists?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Split: For hash check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Content": {
+      "main": [
+        [
+          {
+            "node": "Merge Content ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Content ID": {
+      "main": [
+        [
+          {
+            "node": "Inspect Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspect Items": {
+      "main": [
+        [
+          {
+            "node": "Chunk and Prepare for Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunk and Prepare for Embedding": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Format Embedding for Postgres2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Schedule Trigger": [
+      {
+        "timestamp": "2025-12-09T22:59:16.223+05:30",
+        "Readable date": "December 9th 2025, 10:59:16 pm",
+        "Readable time": "10:59:16 pm",
+        "Day of week": "Tuesday",
+        "Year": "2025",
+        "Month": "December",
+        "Day of month": "09",
+        "Hour": "22",
+        "Minute": "59",
+        "Second": "16",
+        "Timezone": "Asia/Calcutta (UTC+05:30)"
+      }
+    ]
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "63a77ed77bf09f03ba6c90c140f515163e715e09c649b39ba7e68fafac81943a"
+  }
+}
