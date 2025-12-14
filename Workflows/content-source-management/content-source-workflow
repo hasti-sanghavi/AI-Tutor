@@ -1,0 +1,435 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "source-management",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "cd41328a-87bb-45b3-b693-8f93a8631bae",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -848,
+        304
+      ],
+      "webhookId": "8709f3bd-545c-42db-9336-d009113df48f"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge data from both Webhook and Chat triggers\nconst inputData = $input.all();\nlet action = '';\nlet url = '';\nlet title = '';\nlet priority = '';\nlet id = '';\n\n// Check if input is from Webhook or Chat\nfor (const item of inputData) {\n  if (item.json.chatInput) {\n    // From Chat Trigger - parse natural language\n    const chatInput = item.json.chatInput.toLowerCase();\n    \n    // Detect action\n    if (chatInput.includes('add') || chatInput.includes('create')) {\n      action = 'add_source';\n      \n      // Extract URL (look for http/https)\n      const urlMatch = chatInput.match(/(https?:\\/\\/[^\\s]+)/);\n      if (urlMatch) url = urlMatch[1];\n      \n      // Extract title\n      const titleMatch = chatInput.match(/(?:title|called|named)[\\s:]+[\"']?([^\"']+)[\"']?/i) || \n                         chatInput.match(/[\"']([^\"']+)[\"']/);\n      if (titleMatch) title = titleMatch[1].trim();\n      \n      // Extract priority\n      const priorityMatch = chatInput.match(/priority[\\s:]+([1-5])/i);\n      if (priorityMatch) priority = parseInt(priorityMatch[1]);\n      \n    } else if (chatInput.includes('list') || chatInput.includes('show')) {\n      action = 'list_sources';\n      \n    } else if (chatInput.includes('delete') || chatInput.includes('remove')) {\n      action = 'delete_source';\n      \n      // Extract ID\n      const idMatch = chatInput.match(/id[\\s:]+([a-f0-9-]+)/i);\n      if (idMatch) id = idMatch[1];\n      \n    } else if (chatInput.includes('toggle') || chatInput.includes('enable') || chatInput.includes('disable')) {\n      action = 'toggle_source';\n      \n      const idMatch = chatInput.match(/id[\\s:]+([a-f0-9-]+)/i);\n      if (idMatch) id = idMatch[1];\n    }\n    \n  } else if (item.json.body) {\n    // From Webhook - structured data\n    action = item.json.body.action || '';\n    url = item.json.body.url || '';\n    title = item.json.body.title || '';\n    priority = item.json.body.priority || 3;\n    id = item.json.body.id || '';\n  }\n}\n\nreturn [{\n  json: {\n    action,\n    url,\n    title,\n    priority,\n    id\n  }\n}];"
+      },
+      "id": "a89d2599-6902-47cb-b0f3-c5da9e4d1cf3",
+      "name": "Parse Input & Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -576,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.action }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "add_source"
+            },
+            {
+              "value2": "list_sources",
+              "output": 1
+            },
+            {
+              "value2": "delete_source",
+              "output": 2
+            },
+            {
+              "value2": "toggle_source",
+              "output": 3
+            }
+          ]
+        }
+      },
+      "id": "755b95ba-2ace-459e-91d2-dd9a24f4ff33",
+      "name": "Route by Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        -352,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "content_sources",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "source_type",
+              "fieldValue": "rss"
+            },
+            {
+              "fieldId": "url",
+              "fieldValue": "={{ $json.url }}"
+            },
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "priority",
+              "fieldValue": "={{ $json.priority }}"
+            },
+            {
+              "fieldId": "active",
+              "fieldValue": "true"
+            },
+            {
+              "fieldId": "metadata",
+              "fieldValue": "{}"
+            }
+          ]
+        }
+      },
+      "id": "e0a56e70-22c8-476e-804f-38d51bfbee3c",
+      "name": "Insert New Source",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -128,
+        -32
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "fjUf9Xg5DunBOm4A",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content_sources",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "id": "55f72216-1961-4baa-a161-c864ef2c00e7",
+      "name": "Get All Sources",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -128,
+        160
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "fjUf9Xg5DunBOm4A",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "content_sources",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "id": "f613c2fd-1f57-4df1-8a21-2c90db360d73",
+      "name": "Get Current Status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        496
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "fjUf9Xg5DunBOm4A",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "content_sources",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "active",
+              "fieldValue": "={{ !$json.active }}"
+            }
+          ]
+        }
+      },
+      "id": "77947a44-218b-4c96-984f-f1fff4df08fe",
+      "name": "Update Status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        32,
+        496
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "fjUf9Xg5DunBOm4A",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "tableId": "content_sources",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "id": "29b34c7f-25e7-49d8-853c-535792d2d9d1",
+      "name": "Delete Source",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -112,
+        336
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "fjUf9Xg5DunBOm4A",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const action = $item.json.action;\n\nlet message = 'Operation completed';\n\nif (action === 'add_source') message = '✅ Source added';\nif (action === 'update_source') message = '🔄 Source updated';\nif (action === 'delete_source') message = '🗑 Source deleted';\n\nreturn {\n  action,\n  message,\n  result: $input.first().json\n};\n"
+      },
+      "id": "cddec5cc-901b-4f9c-8172-46e60c4c1d08",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -848,
+        128
+      ],
+      "id": "c1ce1651-79b6-4eaf-9cfd-8500be7d548f",
+      "name": "When chat message received",
+      "webhookId": "1cbd61e8-f368-417f-afd9-6f2a2fc19452",
+      "executeOnce": false,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "message": "={{ $json.message }}\n{{ $json.data }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chat",
+      "typeVersion": 1,
+      "position": [
+        816,
+        352
+      ],
+      "id": "4d7a456d-3492-4523-bf27-47047fd4d85d",
+      "name": "Respond to Chat"
+    },
+    {
+      "parameters": {
+        "jsCode": "const action = $(\"Parse Input & Route\").all()[0]?.json?.action;\nconst sources = $input.all().map((item) => item.json);\n\nif (action === \"list_sources\") {\n  return [\n    {\n      json: {\n        message: \"📋 Sources retrieved\",\n        data: sources,\n      },\n      pairedItem: sources.map((_, index) => index),\n    },\n  ];\n}\n\nreturn [];\n"
+      },
+      "id": "93ac6db6-c01b-4a28-ade4-64fd40e43746",
+      "name": "Format Response2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        336
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Input & Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input & Route": {
+      "main": [
+        [
+          {
+            "node": "Route by Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Action": {
+      "main": [
+        [
+          {
+            "node": "Insert New Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get All Sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Delete Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Current Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert New Source": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Sources": {
+      "main": [
+        [
+          {
+            "node": "Format Response2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current Status": {
+      "main": [
+        [
+          {
+            "node": "Update Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Source": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Parse Input & Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response2": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "63a77ed77bf09f03ba6c90c140f515163e715e09c649b39ba7e68fafac81943a"
+  }
+}
