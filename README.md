@@ -4,6 +4,7 @@ This repository contains **Phase 1 implementation** of an AI Learning Coach buil
 
 Phase 1 focuses on **Track A (Beginner)** and implements all core required features using **n8n**, **Supabase**, and **OpenAI**.
 
+video recording: https://youtu.be/N0kkoQlM3IY
 ---
 
 ## 🎯 What This Project Does
